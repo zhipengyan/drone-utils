@@ -1,0 +1,131 @@
+#!/bin/sh
+set -e
+
+if [[ ! -z "${DRONE_WORKSPACE}" ]]; then
+	cd ${DRONE_WORKSPACE}
+fi
+
+# if the netrc enviornment variables exist, write
+# the netrc file.
+
+if [[ ! -z "${DRONE_NETRC_MACHINE}" ]]; then
+	cat <<EOF > /root/.netrc
+machine ${DRONE_NETRC_MACHINE}
+login ${DRONE_NETRC_USERNAME}
+password ${DRONE_NETRC_PASSWORD}
+EOF
+fi
+
+# if the ssh_key environment variable exists, write
+# the ssh key and add the netrc machine to the
+# known hosts file.
+
+if [[ ! -z "${SSH_KEY}" ]]; then
+	mkdir /root/.ssh
+	echo -n "$SSH_KEY" > /root/.ssh/id_rsa
+	chmod 600 /root/.ssh/id_rsa
+
+	touch /root/.ssh/known_hosts
+	chmod 600 /root/.ssh/known_hosts
+	ssh-keyscan -H ${DRONE_NETRC_MACHINE} > /etc/ssh/ssh_known_hosts 2> /dev/null
+fi
+
+# configure git global behavior and parameters via the
+# following environment variables:
+
+
+if [[ -z "${DRONE_COMMIT_AUTHOR_NAME}" ]]; then
+	export DRONE_COMMIT_AUTHOR_NAME=drone
+fi
+
+if [[ -z "${DRONE_COMMIT_AUTHOR_EMAIL}" ]]; then
+	export DRONE_COMMIT_AUTHOR_EMAIL=drone@localhost
+fi
+
+export GIT_AUTHOR_NAME=${DRONE_COMMIT_AUTHOR_NAME}
+export GIT_AUTHOR_EMAIL=${DRONE_COMMIT_AUTHOR_EMAIL}
+export GIT_COMMITTER_NAME=${DRONE_COMMIT_AUTHOR_NAME}
+export GIT_COMMITTER_EMAIL=${DRONE_COMMIT_AUTHOR_EMAIL}
+
+# go to the shared volume and initialize the repository if necessary and clone
+cd /tmp/git
+# remove the lockfile if it is created before more than 30 mins
+removeOlderLockfile() {
+  echo "====> check if the lockfile is older than 30mins"
+  if [-f index.lock]
+  then
+    create_time=`cat index.lock`
+    if [ -z $create_time ]
+    then
+      echo '====> lockfile is empty, remove it'
+      rm -f index.lock
+    else
+      cur_time=`date +%s`
+      range=`expr $cur_time - $create_time`
+      echo "====> lastTime: ${create_time}, currentTime: ${cur_time}, interval: ${range}"
+      if [ "$range" -ge "1800" ]
+      then
+        echo "====> lockfile is older, remove it"
+        rm index.lock
+      fi
+    fi
+  fi
+}
+
+if [ -f index.lock ]
+then
+  removeOlderLockfile
+fi
+
+echo "====> check if the lockfile is exist"
+while [ -f index.lock ]
+do
+  echo "====> other process is running, wait..."
+  sleep 2
+  removeOlderLockfile
+done
+
+# create lock file
+echo "====> create lockfile and write timestamp"
+echo `date +%s` > index.lock
+
+if [ ! -d .git ]; then
+  echo "====> initialize git in cache dir"
+	git init
+	git remote add origin ${DRONE_REMOTE_URL}
+  echo "====> fetch all"
+  git fetch --all
+fi
+
+# pull everything. normally this would be slow, but since the repository is cached
+# it should be relatively quick.
+echo "====> fetch in cache dir"
+cur_branch=`git branch | grep \* | cut -d ' ' -f2`
+if [ "$cur_branch" = "$DRONE_BRANCH" ]
+then
+  echo "====> current branch is target branch, use git pull"
+  git pull
+else
+  echo "====> current branch isn't target branch, use git fetch and checkout"
+  git fetch origin ${DRONE_BRANCH}
+  git checkout ${DRONE_BRANCH}
+fi
+echo "====> finish git fetch"
+
+# return to our working directory 
+cd $OLDPWD
+
+# use the cached git repository (on disk) as the remote
+echo "====> initialize git current dir"
+git init
+git remote add origin /tmp/git
+
+echo "====> fetch in current dir"
+# checkout the specific branch and commit into the current directory
+git fetch origin +refs/heads/${DRONE_BRANCH}
+git checkout ${DRONE_COMMIT} -b ${DRONE_BRANCH}
+
+# remove lock file
+rm /tmp/git/index.lock
+echo "====> remove lock file"
+echo "====> finish clone"

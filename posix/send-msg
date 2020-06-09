@@ -1,0 +1,10 @@
+#!/bin/sh
+set -x
+replace=''
+curl "https://oapi.dingtalk.com/robot/send?access_token=${DING_TOKEN}" \
+  -H 'Content-Type: application/json' \
+  -d "{'msgtype': 'markdown', 'markdown': {
+      'title': '构建 ${DRONE_COMMIT_BRANCH}',
+      'text': '## 构建: ${DRONE_COMMIT_BRANCH}\n### 结果: ${SHIMO_BUILD_STATUS}\n#### 提交者: ${DRONE_COMMIT_AUTHOR}\n#### 提交信息: ${DRONE_COMMIT_MESSAGE}\n#### repo信息: [${DRONE_REPO}/${DRONE_COMMIT_BRANCH}](${DRONE_REPO_LINK}/commits/${DRONE_COMMIT_BRANCH})\n#### 构建地址: [drone](http://${DRONE_SYSTEM_HOSTNAME}/${DRONE_REPO}/${DRONE_BUILD_NUMBER})\n#### 部署地址: [gitlab pipeline](https://git.shimo.im/shimo/${DRONE_REPO//ShimoFour\//$replace}/pipelines)'
+      }}"
+exit 0
